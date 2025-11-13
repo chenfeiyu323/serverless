@@ -65,14 +65,17 @@ jobs:
             echo "Updating existing Lambda function..."
             aws lambda update-function-code \
               --function-name "$LAMBDA_FUNCTION_NAME" \
-              --zip-file fileb://lambda.zip >/dev/null
+              --zip-file fileb://lambda.zip
 
+            # Note: do NOT include reserved keys (e.g. AWS_REGION) in the Lambda
+            # environment variables. AWS will reject requests that attempt to set
+            # these reserved keys. Use the workflow env for AWS CLI instead.
             aws lambda update-function-configuration \
               --function-name "$LAMBDA_FUNCTION_NAME" \
               --role "$LAMBDA_ROLE_ARN" \
               --handler "src/index.handler" \
               --runtime "nodejs20.x" \
-              --environment "Variables={AWS_REGION=${AWS_REGION},DEDUPE_TABLE_NAME=${DEDUPE_TABLE_NAME},FROM_EMAIL=${FROM_EMAIL},VERIFICATION_BASE_URL=${VERIFICATION_BASE_URL}}" >/dev/null
+              --environment "Variables={DEDUPE_TABLE_NAME=${DEDUPE_TABLE_NAME},FROM_EMAIL=${FROM_EMAIL},VERIFICATION_BASE_URL=${VERIFICATION_BASE_URL}}"
           else
             echo "Creating new Lambda function..."
             aws lambda create-function \
@@ -82,8 +85,9 @@ jobs:
               --handler "src/index.handler" \
               --timeout 10 \
               --memory-size 256 \
-              --environment "Variables={AWS_REGION=${AWS_REGION},DEDUPE_TABLE_NAME=${DEDUPE_TABLE_NAME},FROM_EMAIL=${FROM_EMAIL},VERIFICATION_BASE_URL=${VERIFICATION_BASE_URL}}" \
-              --zip-file fileb://lambda.zip >/dev/null
+              # Do NOT include AWS_REGION in Lambda environment variables (reserved key).
+              --environment "Variables={DEDUPE_TABLE_NAME=${DEDUPE_TABLE_NAME},FROM_EMAIL=${FROM_EMAIL},VERIFICATION_BASE_URL=${VERIFICATION_BASE_URL}}" \
+              --zip-file fileb://lambda.zip
           fi
 
           echo "Lambda deployment finished."
