@@ -45,12 +45,28 @@ jobs:
           npm install --omit=dev
           zip -r ../lambda.zip .
 
-      - name: Configure AWS credentials
+      - name: Configure AWS credentials (static keys)
+        if: ${{ secrets.AWS_ACCESS_KEY_ID_DEV && secrets.AWS_SECRET_ACCESS_KEY_DEV }}
         uses: aws-actions/configure-aws-credentials@v4
         with:
           aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_DEV }}
           aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_DEV }}
           aws-region: ${{ env.AWS_REGION }}
+
+      - name: Configure AWS credentials (OIDC assume-role)
+        if: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_OIDC_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Fail if no AWS auth configured
+        if: ${{ !secrets.AWS_ACCESS_KEY_ID_DEV && !secrets.AWS_OIDC_ROLE_ARN }}
+        run: |
+          echo "Error: No AWS credentials are configured for this workflow."
+          echo "Set repository secrets 'AWS_ACCESS_KEY_ID_DEV' and 'AWS_SECRET_ACCESS_KEY_DEV' or"
+          echo "set 'AWS_OIDC_ROLE_ARN' (an IAM role ARN for GitHub OIDC) and try again."
+          exit 1
 
       - name: Deploy Lambda function
         run: |
