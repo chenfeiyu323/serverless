@@ -44,6 +44,13 @@ jobs:
           cd build
           npm install --omit=dev
           zip -r ../lambda.zip .
+          # Debug: show zip file info so CI logs prove the artifact exists
+          cd ..
+          echo "---- lambda.zip info ----"
+          ls -l lambda.zip || true
+          if command -v unzip >/dev/null 2>&1; then
+            unzip -l lambda.zip || true
+          fi
 
       - name: Configure AWS credentials
         uses: aws-actions/configure-aws-credentials@v4
@@ -54,7 +61,8 @@ jobs:
 
       - name: Deploy Lambda function
         run: |
-          set -euo pipefail
+          # Enable shell debug so the exact aws CLI calls and output are visible in logs
+          set -xeuo pipefail
 
           LAMBDA_ROLE_ARN="${{ secrets.LAMBDA_EXEC_ROLE_ARN }}"
           DEDUPE_TABLE_NAME="${{ vars.DEDUPE_TABLE_NAME }}"
@@ -63,6 +71,14 @@ jobs:
 
           if aws lambda get-function --function-name "$LAMBDA_FUNCTION_NAME" >/dev/null 2>&1; then
             echo "Updating existing Lambda function..."
+            # Verify artifact exists and is non-empty before calling AWS
+            if [ ! -s lambda.zip ]; then
+              echo "ERROR: lambda.zip is missing or empty" >&2
+              ls -lah || true
+              exit 2
+            fi
+
+            echo "Running: aws lambda update-function-code --function-name $LAMBDA_FUNCTION_NAME --zip-file fileb://lambda.zip"
             aws lambda update-function-code \
               --function-name "$LAMBDA_FUNCTION_NAME" \
               --zip-file fileb://lambda.zip
@@ -87,7 +103,23 @@ jobs:
               --memory-size 256 \
               # Do NOT include AWS_REGION in Lambda environment variables (reserved key).
               --environment "Variables={DEDUPE_TABLE_NAME=${DEDUPE_TABLE_NAME},FROM_EMAIL=${FROM_EMAIL},VERIFICATION_BASE_URL=${VERIFICATION_BASE_URL}}" \
-              --zip-file fileb://lambda.zip
+              # Verify artifact exists and is non-empty before calling AWS
+              if [ ! -s lambda.zip ]; then
+                echo "ERROR: lambda.zip is missing or empty" >&2
+                ls -lah || true
+                exit 2
+              fi
+
+              echo "Running: aws lambda create-function --function-name $LAMBDA_FUNCTION_NAME --zip-file fileb://lambda.zip [other args]"
+              aws lambda create-function \
+                --function-name "$LAMBDA_FUNCTION_NAME" \
+                --runtime "nodejs20.x" \
+                --role "$LAMBDA_ROLE_ARN" \
+                --handler "src/index.handler" \
+                --timeout 10 \
+                --memory-size 256 \
+                --environment "Variables={DEDUPE_TABLE_NAME=${DEDUPE_TABLE_NAME},FROM_EMAIL=${FROM_EMAIL},VERIFICATION_BASE_URL=${VERIFICATION_BASE_URL}}" \
+                --zip-file fileb://lambda.zip
           fi
 
           echo "Lambda deployment finished."
