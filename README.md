@@ -3,6 +3,8 @@
 This repository contains the Lambda function that sends verification emails
 when a new user account is created in the web application.
 
+<!-- Trigger CI: minor whitespace change -->
+
  The Lambda is triggered by an **SNS topic** in the DEV AWS account. The webapp
  publishes a message with `email` and `token`. The Lambda:
  1. Writes a record to a DynamoDB table for **de-duplication**.
