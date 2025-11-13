@@ -1,0 +1,81 @@
+name: Deploy Lambda
+
+on:
+  push:
+    branches:
+      - main
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: us-east-1
+  LAMBDA_FUNCTION_NAME: csye6225-a9-email-lambda
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Zip Lambda artifact
+        run: |
+          mkdir -p build
+          cp -R src package.json package-lock.json* build/ 2>/dev/null || true
+          cd build
+          npm install --omit=dev
+          zip -r ../lambda.zip .
+
+      - name: Configure AWS credentials
+        uses: aws-actions/configure-aws-credentials@v4
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID_DEV }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY_DEV }}
+          aws-region: ${{ env.AWS_REGION }}
+
+      - name: Deploy Lambda function
+        run: |
+          set -euo pipefail
+
+          LAMBDA_ROLE_ARN="${{ secrets.LAMBDA_EXEC_ROLE_ARN }}"
+          DEDUPE_TABLE_NAME="${{ vars.DEDUPE_TABLE_NAME }}"
+          FROM_EMAIL="${{ vars.FROM_EMAIL }}"
+          VERIFICATION_BASE_URL="${{ vars.VERIFICATION_BASE_URL }}"
+
+          if aws lambda get-function --function-name "$LAMBDA_FUNCTION_NAME" >/dev/null 2>&1; then
+            echo "Updating existing Lambda function..."
+            aws lambda update-function-code \
+              --function-name "$LAMBDA_FUNCTION_NAME" \
+              --zip-file fileb://lambda.zip >/dev/null
+
+            aws lambda update-function-configuration \
+              --function-name "$LAMBDA_FUNCTION_NAME" \
+              --role "$LAMBDA_ROLE_ARN" \
+              --handler "src/index.handler" \
+              --runtime "nodejs20.x" \
+              --environment "Variables={AWS_REGION=${AWS_REGION},DEDUPE_TABLE_NAME=${DEDUPE_TABLE_NAME},FROM_EMAIL=${FROM_EMAIL},VERIFICATION_BASE_URL=${VERIFICATION_BASE_URL}}" >/dev/null
+          else
+            echo "Creating new Lambda function..."
+            aws lambda create-function \
+              --function-name "$LAMBDA_FUNCTION_NAME" \
+              --runtime "nodejs20.x" \
+              --role "$LAMBDA_ROLE_ARN" \
+              --handler "src/index.handler" \
+              --timeout 10 \
+              --memory-size 256 \
+              --environment "Variables={AWS_REGION=${AWS_REGION},DEDUPE_TABLE_NAME=${DEDUPE_TABLE_NAME},FROM_EMAIL=${FROM_EMAIL},VERIFICATION_BASE_URL=${VERIFICATION_BASE_URL}}" \
+              --zip-file fileb://lambda.zip >/dev/null
+          fi
+
+          echo "Lambda deployment finished."
