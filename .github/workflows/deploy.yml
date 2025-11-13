@@ -94,6 +94,15 @@ jobs:
               --environment "Variables={DEDUPE_TABLE_NAME=${DEDUPE_TABLE_NAME},FROM_EMAIL=${FROM_EMAIL},VERIFICATION_BASE_URL=${VERIFICATION_BASE_URL}}"
           else
             echo "Creating new Lambda function..."
+            # Verify artifact exists and is non-empty before calling AWS
+            if [ ! -s lambda.zip ]; then
+              echo "ERROR: lambda.zip is missing or empty" >&2
+              ls -lah || true
+              exit 2
+            fi
+
+            # Do NOT include AWS_REGION in Lambda environment variables (reserved key).
+            echo "Running: aws lambda create-function --function-name $LAMBDA_FUNCTION_NAME --zip-file fileb://lambda.zip"
             aws lambda create-function \
               --function-name "$LAMBDA_FUNCTION_NAME" \
               --runtime "nodejs20.x" \
@@ -101,25 +110,8 @@ jobs:
               --handler "src/index.handler" \
               --timeout 10 \
               --memory-size 256 \
-              # Do NOT include AWS_REGION in Lambda environment variables (reserved key).
               --environment "Variables={DEDUPE_TABLE_NAME=${DEDUPE_TABLE_NAME},FROM_EMAIL=${FROM_EMAIL},VERIFICATION_BASE_URL=${VERIFICATION_BASE_URL}}" \
-              # Verify artifact exists and is non-empty before calling AWS
-              if [ ! -s lambda.zip ]; then
-                echo "ERROR: lambda.zip is missing or empty" >&2
-                ls -lah || true
-                exit 2
-              fi
-
-              echo "Running: aws lambda create-function --function-name $LAMBDA_FUNCTION_NAME --zip-file fileb://lambda.zip [other args]"
-              aws lambda create-function \
-                --function-name "$LAMBDA_FUNCTION_NAME" \
-                --runtime "nodejs20.x" \
-                --role "$LAMBDA_ROLE_ARN" \
-                --handler "src/index.handler" \
-                --timeout 10 \
-                --memory-size 256 \
-                --environment "Variables={DEDUPE_TABLE_NAME=${DEDUPE_TABLE_NAME},FROM_EMAIL=${FROM_EMAIL},VERIFICATION_BASE_URL=${VERIFICATION_BASE_URL}}" \
-                --zip-file fileb://lambda.zip
+              --zip-file fileb://lambda.zip
           fi
 
           echo "Lambda deployment finished."
