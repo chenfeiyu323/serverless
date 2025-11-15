@@ -1,90 +1,101 @@
-# CSYE 6225 - Assignment 09 - Serverless (Email Lambda)
+# CSYE 6225 Email Lambda
 
-This repository contains the Lambda function that sends verification emails
-when a new user account is created in the web application.
+Serverless companion service for the Assignment 09 web application. The Lambda
+is triggered by the `csye6225-a4-user-signup` SNS topic, records every message in
+DynamoDB for de-duplication, then sends a verification email through Amazon SES
+with a link to the API's `/v1/verifyEmail` endpoint.
 
-<!-- Trigger CI: minor whitespace change -->
+## Architecture
+- Webapp publishes `{ email, token, requestedAt }` events to SNS.
+- SNS fan-outs to `csye6225-a9-email-lambda` (deployed from this repo).
+- Lambda writes `message_key = email#token` to DynamoDB (table:
+  `csye6225-a4-email-dedupe`) to prevent duplicate sends.
+- Lambda calls SES v2 to deliver an email that links to
+  `https://<alb>/v1/validateEmail?email=...&token=...`.
 
- The Lambda is triggered by an **SNS topic** in the DEV AWS account. The webapp
- publishes a message with `email` and `token`. The Lambda:
- 1. Writes a record to a DynamoDB table for **de-duplication**.
- 2. Sends a verification email via Amazon SES v2 with a link like:
+Terraform (`../terra`) already provisions the SNS topic, IAM role policy,
+DynamoDB table and Lambda permission/subscription; this repo's job is simply to
+package and update the Lambda code.
 
-    `https://{your-api-domain}/validateEmail?email=someone@example.com&token=<UUID>`
+## Prerequisites
+1. **Node.js 20+** – used for local installs and packaging.
+2. **AWS CLI v2** – required for manual deploy/test commands.
+3. **IAM role** (`csye6225-a4-a9-lambda-role`) with access to
+   `ses:SendEmail`, `ses:SendRawEmail`, `dynamodb:PutItem`, and CloudWatch Logs.
+4. **Amazon SES configuration**:
+   - The `FROM_EMAIL` identity must be verified in `us-east-1`.
+   - If the account is still in the SES sandbox, every recipient (or the entire
+     domain) must also be verified or emails will be suppressed.
+5. **Terraform outputs** from the infra repo (`terraform -chdir=terra output`):
+   - `sns_user_signup_topic_arn`
+   - `dynamodb_dedupe_table_name`
+   - `alb_dns_name` (to build `VERIFICATION_BASE_URL`).
 
- ## Prerequisites
+## Local setup
+```bash
+cd serverless
+npm install
+```
+This installs dependencies and produces `package-lock.json` for reproducible
+builds.
 
- - Node.js 18+ (recommended: Node 20)
- - npm
- - AWS account with:
-   - SNS topic ARN (from Terraform output `sns_user_signup_topic_arn`)
-   - DynamoDB table for dedupe (primary key `message_key` as string)
-   - SES configured with a verified `FROM` email address
-   - IAM Role for Lambda execution (with permission to use SES, DynamoDB, CloudWatch Logs)
- - Terraform changes in **tf-aws-infra-main** to create:
-   - Lambda execution role and its policy
-   - DynamoDB table
-   - SNS subscription to this Lambda
+## Deployment options
+### 1. GitHub Actions (recommended)
+The workflow in `.github/workflows/deploy.yml` zips the Lambda, installs
+production dependencies, and either creates or updates the function. Configure
+these secrets/variables in the repository settings:
 
- ## Local development
+| Name | Type | Description |
+| --- | --- | --- |
+| `AWS_ACCESS_KEY_ID_DEV`, `AWS_SECRET_ACCESS_KEY_DEV` | Secret | IAM user with permission to update the Lambda. |
+| `LAMBDA_EXEC_ROLE_ARN` | Secret | ARN of `csye6225-a4-a9-lambda-role`. |
+| `FROM_EMAIL` | Variable | Verified SES identity, e.g. `no-reply@dev.csye6225demo.com`. |
+| `VERIFICATION_BASE_URL` | Variable | Full HTTPS URL to `/validateEmail`, for example `https://csye6225-a4-alb-xxxx.us-east-1.elb.amazonaws.com/v1/validateEmail`. |
+| `DEDUPE_TABLE_NAME` | Variable | DynamoDB table name from Terraform output. |
 
- ```bash
- # install dependencies
- npm install
+Push to `main` to trigger the pipeline.
 
- # run lint (placeholder)
- npm run lint
- ```
+### 2. Manual CLI deploy
+Useful for urgent fixes when CI is unavailable.
+```bash
+npm install --omit=dev
+zip -r lambda.zip src package.json package-lock.json node_modules
+aws lambda update-function-code --function-name csye6225-a9-email-lambda --zip-file fileb://lambda.zip
+aws lambda update-function-configuration \
+  --function-name csye6225-a9-email-lambda \
+  --environment "Variables={DEDUPE_TABLE_NAME=csye6225-a4-email-dedupe,FROM_EMAIL=no-reply@dev.csye6225demo.com,VERIFICATION_BASE_URL=https://.../v1/validateEmail}"
+```
 
- The function entrypoint is `src/index.js` with exported `handler(event)`.
+## Testing & troubleshooting
+1. **Publish a synthetic SNS event** after redeploying the Lambda:
+   ```powershell
+   $topic = terraform -chdir=terra output -raw sns_user_signup_topic_arn
+   aws sns publish --topic-arn $topic --message '{"email":"demo@example.com","token":"12345","requestedAt":"2025-11-15T15:00:00Z"}'
+   ```
+2. **Tail Lambda logs** to confirm execution:
+   ```powershell
+   aws logs tail /aws/lambda/csye6225-a9-email-lambda --since 5m --follow
+   ```
+   (Requires IAM permission `logs:FilterLogEvents`).
+3. **SES sandbox**: if messages never arrive, verify the recipient address or
+   request production access in SES.
+4. **DynamoDB duplicates**: the lambda skips emails if the same
+   `email#token` already exists. Delete older entries from the table when
+   re-running manual tests.
 
- ## Deployment via GitHub Actions
+## How this fixes the webapp issue
+- Webapp instances now receive `SNS_USER_SIGNUP_TOPIC_ARN` via
+  `terra/webapp_user_data.tf`, so each signup publishes to the topic.
+- This repo packages a CommonJS Lambda handler that Node.js 20 can execute,
+  preventing the previous syntax error and allowing SES to deliver the
+  verification email.
 
- The workflow `.github/workflows/deploy.yml` is triggered on every push to `main`.
-
- It will:
-
- 1. Install Node.js
- 2. Install dependencies
- 3. Create a `lambda.zip` artifact
- 4. Use AWS CLI to create or update the Lambda function
-
- ### Required GitHub Secrets
-
- In the **serverless** repository settings, configure:
-
- - `AWS_ACCESS_KEY_ID_DEV`
- - `AWS_SECRET_ACCESS_KEY_DEV`
- - `LAMBDA_EXEC_ROLE_ARN` – ARN of the Lambda execution role created by Terraform
-
- ### Recommended GitHub Variables
-
- Configure the following repository **variables**:
-
- - `DEDUPE_TABLE_NAME` – DynamoDB table name used for deduplication
- - `FROM_EMAIL` – Verified SES identity used as sender
- - `VERIFICATION_BASE_URL` – Base URL of your webapp validation endpoint, e.g.
-   `https://api.dev.csye6225demo.com/validateEmail`
-
- ## Manual deployment (optional)
-
- If you want to deploy from local machine instead of GitHub Actions:
-
- ```bash
- npm install
- npm run build   # (or just npm install --omit=dev in a temp dir)
-
- zip -r lambda.zip src package.json package-lock.json
-
- aws lambda create-function       --function-name csye6225-a9-email-lambda       --runtime nodejs20.x       --role <LAMBDA_EXEC_ROLE_ARN>       --handler src/index.handler       --timeout 10       --memory-size 256       --environment "Variables={AWS_REGION=us-east-1,DEDUPE_TABLE_NAME=<table>,FROM_EMAIL=<from>,VERIFICATION_BASE_URL=<url>}"       --zip-file fileb://lambda.zip
- ```
-
- Subsequent updates can use `aws lambda update-function-code` and
- `aws lambda update-function-configuration`.
-
- ## Notes
-
- - The function uses DynamoDB `PutItem` with `ConditionExpression` to avoid
-   sending duplicate emails when the same SNS message is delivered multiple times.
- - Make sure your SES account is **out of the sandbox**, otherwise you can only send
-   to verified email addresses.
+## Pushing changes
+After updating the serverless repo:
+```bash
+git status
+git add README.md package-lock.json src/index.js
+git commit -m "docs: document lambda deployment and fix handler exports"
+git push origin main
+```
+Pushing to `main` automatically redeploys the Lambda via GitHub Actions.

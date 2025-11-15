@@ -1,5 +1,5 @@
-import { SESv2Client, SendEmailCommand } from "@aws-sdk/client-sesv2";
-import { DynamoDBClient, PutItemCommand } from "@aws-sdk/client-dynamodb";
+const { SESv2Client, SendEmailCommand } = require("@aws-sdk/client-sesv2");
+const { DynamoDBClient, PutItemCommand } = require("@aws-sdk/client-dynamodb");
 
 const region = process.env.AWS_REGION || "us-east-1";
 const fromEmail = process.env.FROM_EMAIL; // e.g. no-reply@csye6225demo.com
@@ -18,7 +18,7 @@ const ddb = new DynamoDBClient({ region });
  *   "timestamp": "2025-11-13T01:23:45.000Z"
  * }
  */
-export const handler = async (event) => {
+const handler = async (event) => {
   console.log("Received event:", JSON.stringify(event));
 
   if (!fromEmail || !verificationBaseUrl || !dedupeTableName) {
@@ -116,3 +116,5 @@ export const handler = async (event) => {
     body: JSON.stringify({ results })
   };
 };
+
+module.exports = { handler };
